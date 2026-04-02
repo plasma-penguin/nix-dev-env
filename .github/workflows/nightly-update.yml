@@ -1,0 +1,530 @@
+name: Nightly Update
+
+on:
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  UBUNTU_BASE_IMAGE: ubuntu
+  UBUNTU_BASE_TAG: "latest"
+
+jobs:
+  update-flake-lock:
+    name: Refresh flake inputs
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+        with:
+          extra-conf: |
+            experimental-features = nix-command flakes
+            extra-substituters = https://cache.numtide.com
+            extra-trusted-public-keys = niks3.numtide.com-1:DTx8wZduET09hRmMtKdQDxNNthLQETkc/yaX7M4qK0g=
+
+      # Optional CI cache acceleration is disabled for now.
+      # - name: Enable Magic Nix Cache
+      #   uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: Update flake inputs
+        run: nix flake update
+
+      - name: Upload flake.lock artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flake-lock
+          path: flake.lock
+          retention-days: 1
+
+  repin-ubuntu-base:
+    name: Repin Ubuntu base (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            nix_system: x86_64-linux
+            runner: ubuntu-latest
+          - arch: arm64
+            nix_system: aarch64-linux
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+        with:
+          extra-conf: |
+            experimental-features = nix-command flakes
+            extra-substituters = https://cache.numtide.com
+            extra-trusted-public-keys = niks3.numtide.com-1:DTx8wZduET09hRmMtKdQDxNNthLQETkc/yaX7M4qK0g=
+
+      # Optional CI cache acceleration is disabled for now.
+      # - name: Enable Magic Nix Cache
+      #   uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: Prefetch Ubuntu base image metadata
+        run: |
+          set -euo pipefail
+
+          PREFETCH_OUTPUT=$(nix run nixpkgs#nix-prefetch-docker -- "$UBUNTU_BASE_IMAGE" --image-tag "$UBUNTU_BASE_TAG" --arch "${{ matrix.arch }}" --os linux 2>&1)
+          IMAGE_DIGEST=$(printf '%s\n' "$PREFETCH_OUTPUT" | sed -n 's/^-> ImageDigest: //p' | tail -1)
+          IMAGE_HASH=$(printf '%s\n' "$PREFETCH_OUTPUT" | sed -n 's/^-> ImageHash: //p' | tail -1)
+
+          if [[ -z "$IMAGE_DIGEST" || -z "$IMAGE_HASH" ]]; then
+            printf '%s\n' "$PREFETCH_OUTPUT"
+            exit 1
+          fi
+
+          mkdir -p /tmp/ubuntu-base-pins
+          printf '%s\n' "$IMAGE_DIGEST" > /tmp/ubuntu-base-pins/imageDigest
+          printf '%s\n' "$IMAGE_HASH" > "/tmp/ubuntu-base-pins/${{ matrix.nix_system }}.hash"
+
+      - name: Upload Ubuntu base artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ubuntu-base-pins-${{ matrix.arch }}
+          path: /tmp/ubuntu-base-pins
+          retention-days: 1
+
+  commit-updates:
+    name: Commit nightly updates
+    needs:
+      - update-flake-lock
+      - repin-ubuntu-base
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      did_update: ${{ steps.commit.outputs.did_update }}
+      commit_sha: ${{ steps.commit.outputs.commit_sha }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Download flake.lock artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: flake-lock
+          path: /tmp/flake-lock
+
+      - name: Download Ubuntu base artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ubuntu-base-pins-*
+          path: /tmp/ubuntu-base-pins
+          merge-multiple: false
+
+      - name: Apply nightly updates
+        run: |
+          set -euo pipefail
+
+          cp /tmp/flake-lock/flake.lock flake.lock
+
+          for dir in /tmp/ubuntu-base-pins/ubuntu-base-pins-*/; do
+            if [[ -f "${dir}imageDigest" ]]; then
+              IMAGE_DIGEST=$(cat "${dir}imageDigest")
+              sed -i "s|ubuntuImageDigest = \"sha256:[^\"]*\";|ubuntuImageDigest = \"$IMAGE_DIGEST\";|" flake.nix
+              break
+            fi
+          done
+
+          if [[ -f /tmp/ubuntu-base-pins/ubuntu-base-pins-amd64/x86_64-linux.hash ]]; then
+            AMD64_HASH=$(cat /tmp/ubuntu-base-pins/ubuntu-base-pins-amd64/x86_64-linux.hash)
+            sed -i "s|\"x86_64-linux\" = \"sha256-[^\"]*\";|\"x86_64-linux\" = \"$AMD64_HASH\";|" flake.nix
+          fi
+
+          if [[ -f /tmp/ubuntu-base-pins/ubuntu-base-pins-arm64/aarch64-linux.hash ]]; then
+            ARM64_HASH=$(cat /tmp/ubuntu-base-pins/ubuntu-base-pins-arm64/aarch64-linux.hash)
+            sed -i "s|\"aarch64-linux\" = \"sha256-[^\"]*\";|\"aarch64-linux\" = \"$ARM64_HASH\";|" flake.nix
+          fi
+
+      - name: Commit and push updates
+        id: commit
+        run: |
+          set -euo pipefail
+
+          if git diff --quiet flake.lock flake.nix; then
+            echo "did_update=false" >> "$GITHUB_OUTPUT"
+            echo "commit_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add flake.lock flake.nix
+          git commit -m "chore: update flake inputs and Ubuntu base image"
+          NEW_SHA=$(git rev-parse HEAD)
+          git push origin HEAD:main
+
+          echo "did_update=true" >> "$GITHUB_OUTPUT"
+          echo "commit_sha=$NEW_SHA" >> "$GITHUB_OUTPUT"
+
+  verify-linux:
+    name: Verify nightly update on Linux (${{ matrix.arch }})
+    needs: commit-updates
+    if: ${{ needs.commit-updates.outputs.did_update == 'true' }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout updated revision
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.commit-updates.outputs.commit_sha }}
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+        with:
+          extra-conf: |
+            experimental-features = nix-command flakes
+            extra-substituters = https://cache.numtide.com
+            extra-trusted-public-keys = niks3.numtide.com-1:DTx8wZduET09hRmMtKdQDxNNthLQETkc/yaX7M4qK0g=
+
+      # Optional CI cache acceleration is disabled for now.
+      # - name: Enable Magic Nix Cache
+      #   uses: DeterminateSystems/magic-nix-cache-action@main
+
+      # Optional authenticated Cachix access is disabled for now.
+      # - name: Connect to Cachix
+      #   if: ${{ secrets.CACHIX_CACHE != '' && secrets.CACHIX_AUTH_TOKEN != '' }}
+      #   uses: cachix/cachix-action@v14
+      #   with:
+      #     name: ${{ secrets.CACHIX_CACHE }}
+      #     authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+      - name: Run flake checks
+        run: nix flake check
+
+      - name: Install default package
+        run: nix profile add .#default
+
+      - name: Smoke test nix shell
+        run: nix shell . -c bash -lc 'command -v git && command -v go && command -v node'
+
+      - name: Smoke test nix develop
+        run: nix develop . -c bash -lc 'command -v gopls && command -v python && command -v shellcheck'
+
+      - name: Build Dockerfile image
+        run: docker build -t dockerfile-built-nix-dev-env .
+
+      - name: Smoke test Dockerfile image
+        run: docker run --rm dockerfile-built-nix-dev-env bash -lc 'test "$(id -un)" = nonroot && test "$HOME" = /home/nonroot && test -w /app && command -v git && command -v tini'
+
+      - name: Cleanup Dockerfile image
+        run: docker image rm dockerfile-built-nix-dev-env:latest --force || true
+
+      - name: Build Nix scratch image
+        run: nix build .#containerImage
+
+      - name: Load Nix scratch image
+        run: docker load < result
+
+      - name: Smoke test Nix scratch image
+        run: docker run --rm nix-dev-env:latest bash -lc 'test "$(id -un)" = nonroot && test "$HOME" = /home/nonroot && test -w /app && command -v git'
+
+      - name: Export scratch image artifact
+        run: docker save nix-dev-env:latest -o "nightly-scratch-image-${{ matrix.arch }}.tar"
+
+      - name: Upload scratch image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-scratch-image-${{ matrix.arch }}
+          path: nightly-scratch-image-${{ matrix.arch }}.tar
+          retention-days: 1
+
+      - name: Cleanup Nix scratch image
+        run: |
+          rm -f result "nightly-scratch-image-${{ matrix.arch }}.tar" || true
+          docker image rm nix-dev-env:latest --force || true
+
+      - name: Build Nix Ubuntu image
+        run: nix build .#containerImageUbuntu
+
+      - name: Load Nix Ubuntu image
+        run: docker load < result
+
+      - name: Smoke test Nix Ubuntu image
+        run: docker run --rm nix-dev-env-ubuntu:latest bash -lc 'test "$(id -un)" = nonroot && test "$HOME" = /home/nonroot && test -w /app && command -v git'
+
+      - name: Export Ubuntu image artifact
+        run: docker save nix-dev-env-ubuntu:latest -o "nightly-ubuntu-image-${{ matrix.arch }}.tar"
+
+      - name: Upload Ubuntu image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-ubuntu-image-${{ matrix.arch }}
+          path: nightly-ubuntu-image-${{ matrix.arch }}.tar
+          retention-days: 1
+
+      - name: Cleanup Nix Ubuntu image
+        run: |
+          rm -f result "nightly-ubuntu-image-${{ matrix.arch }}.tar" || true
+          docker image rm nix-dev-env-ubuntu:latest ubuntu:latest --force || true
+
+  verify-macos:
+    name: Verify nightly update on macOS
+    needs: commit-updates
+    if: ${{ needs.commit-updates.outputs.did_update == 'true' }}
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout updated revision
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.commit-updates.outputs.commit_sha }}
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+        with:
+          extra-conf: |
+            experimental-features = nix-command flakes
+            extra-substituters = https://cache.numtide.com
+            extra-trusted-public-keys = niks3.numtide.com-1:DTx8wZduET09hRmMtKdQDxNNthLQETkc/yaX7M4qK0g=
+
+      # Optional CI cache acceleration is disabled for now.
+      # - name: Enable Magic Nix Cache
+      #   uses: DeterminateSystems/magic-nix-cache-action@main
+
+      # Optional authenticated Cachix access is disabled for now.
+      # - name: Connect to Cachix
+      #   if: ${{ secrets.CACHIX_CACHE != '' && secrets.CACHIX_AUTH_TOKEN != '' }}
+      #   uses: cachix/cachix-action@v14
+      #   with:
+      #     name: ${{ secrets.CACHIX_CACHE }}
+      #     authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+      - name: Run flake checks
+        run: nix flake check
+
+      - name: Install default package
+        run: nix profile add .#default
+
+      - name: Smoke test nix shell
+        run: nix shell . -c bash -lc 'command -v git && command -v go && command -v node'
+
+      - name: Smoke test nix develop
+        run: nix develop . -c bash -lc 'command -v gopls && command -v python && command -v shellcheck'
+
+  publish-scratch-images:
+    name: Publish nightly scratch images (${{ matrix.arch }})
+    needs:
+      - commit-updates
+      - verify-linux
+      - verify-macos
+    if: ${{ needs.commit-updates.outputs.did_update == 'true' }}
+    runs-on: ${{ matrix.runner }}
+    environment: dockerhub
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Download scratch image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: nightly-scratch-image-${{ matrix.arch }}
+          path: /tmp/nightly-scratch-image
+
+      - name: Load scratch image
+        run: docker load < "/tmp/nightly-scratch-image/nightly-scratch-image-${{ matrix.arch }}.tar"
+
+      - name: Resolve Docker Hub image name
+        env:
+          DOCKERHUB_REPO: ${{ secrets.DOCKERHUB_REPO }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${DOCKERHUB_REPO:-}" ]]; then
+            IMAGE_NAME="$DOCKERHUB_REPO"
+          else
+            IMAGE_NAME="$DOCKERHUB_USERNAME/nix-dev-env"
+          fi
+          echo "IMAGE_NAME=$IMAGE_NAME" >> "$GITHUB_ENV"
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Push arch-specific scratch tags
+        run: |
+          set -euo pipefail
+          VERSION_TAG="sha-${{ needs.commit-updates.outputs.commit_sha }}"
+          docker tag nix-dev-env:latest "$IMAGE_NAME:${VERSION_TAG}-${{ matrix.arch }}"
+          docker push "$IMAGE_NAME:${VERSION_TAG}-${{ matrix.arch }}"
+          docker tag nix-dev-env:latest "$IMAGE_NAME:latest-${{ matrix.arch }}"
+          docker push "$IMAGE_NAME:latest-${{ matrix.arch }}"
+
+  publish-scratch-manifests:
+    name: Publish nightly scratch manifests
+    needs:
+      - commit-updates
+      - publish-scratch-images
+    if: ${{ needs.commit-updates.outputs.did_update == 'true' }}
+    runs-on: ubuntu-latest
+    environment: dockerhub
+
+    steps:
+      - name: Resolve Docker Hub image name
+        env:
+          DOCKERHUB_REPO: ${{ secrets.DOCKERHUB_REPO }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${DOCKERHUB_REPO:-}" ]]; then
+            IMAGE_NAME="$DOCKERHUB_REPO"
+          else
+            IMAGE_NAME="$DOCKERHUB_USERNAME/nix-dev-env"
+          fi
+          echo "IMAGE_NAME=$IMAGE_NAME" >> "$GITHUB_ENV"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Push scratch manifests
+        run: |
+          set -euo pipefail
+          VERSION_TAG="sha-${{ needs.commit-updates.outputs.commit_sha }}"
+          docker buildx imagetools create \
+            -t "$IMAGE_NAME:${VERSION_TAG}" \
+            "$IMAGE_NAME:${VERSION_TAG}-amd64" \
+            "$IMAGE_NAME:${VERSION_TAG}-arm64"
+          docker buildx imagetools create \
+            -t "$IMAGE_NAME:latest" \
+            "$IMAGE_NAME:latest-amd64" \
+            "$IMAGE_NAME:latest-arm64"
+
+  publish-ubuntu-images:
+    name: Publish nightly Ubuntu images (${{ matrix.arch }})
+    needs:
+      - commit-updates
+      - verify-linux
+      - verify-macos
+    if: ${{ needs.commit-updates.outputs.did_update == 'true' }}
+    runs-on: ${{ matrix.runner }}
+    environment: dockerhub
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Download Ubuntu image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: nightly-ubuntu-image-${{ matrix.arch }}
+          path: /tmp/nightly-ubuntu-image
+
+      - name: Load Ubuntu image
+        run: docker load < "/tmp/nightly-ubuntu-image/nightly-ubuntu-image-${{ matrix.arch }}.tar"
+
+      - name: Resolve Docker Hub image name
+        env:
+          DOCKERHUB_REPO: ${{ secrets.DOCKERHUB_REPO }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${DOCKERHUB_REPO:-}" ]]; then
+            IMAGE_NAME="$DOCKERHUB_REPO"
+          else
+            IMAGE_NAME="$DOCKERHUB_USERNAME/nix-dev-env"
+          fi
+          echo "IMAGE_NAME=$IMAGE_NAME" >> "$GITHUB_ENV"
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Push arch-specific Ubuntu tags
+        run: |
+          set -euo pipefail
+          VERSION_TAG="ubuntu-sha-${{ needs.commit-updates.outputs.commit_sha }}"
+          docker tag nix-dev-env-ubuntu:latest "$IMAGE_NAME:${VERSION_TAG}-${{ matrix.arch }}"
+          docker push "$IMAGE_NAME:${VERSION_TAG}-${{ matrix.arch }}"
+          docker tag nix-dev-env-ubuntu:latest "$IMAGE_NAME:ubuntu-latest-${{ matrix.arch }}"
+          docker push "$IMAGE_NAME:ubuntu-latest-${{ matrix.arch }}"
+
+  publish-ubuntu-manifests:
+    name: Publish nightly Ubuntu manifests
+    needs:
+      - commit-updates
+      - publish-ubuntu-images
+    if: ${{ needs.commit-updates.outputs.did_update == 'true' }}
+    runs-on: ubuntu-latest
+    environment: dockerhub
+
+    steps:
+      - name: Resolve Docker Hub image name
+        env:
+          DOCKERHUB_REPO: ${{ secrets.DOCKERHUB_REPO }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${DOCKERHUB_REPO:-}" ]]; then
+            IMAGE_NAME="$DOCKERHUB_REPO"
+          else
+            IMAGE_NAME="$DOCKERHUB_USERNAME/nix-dev-env"
+          fi
+          echo "IMAGE_NAME=$IMAGE_NAME" >> "$GITHUB_ENV"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Push Ubuntu manifests
+        run: |
+          set -euo pipefail
+          VERSION_TAG="ubuntu-sha-${{ needs.commit-updates.outputs.commit_sha }}"
+          docker buildx imagetools create \
+            -t "$IMAGE_NAME:${VERSION_TAG}" \
+            "$IMAGE_NAME:${VERSION_TAG}-amd64" \
+            "$IMAGE_NAME:${VERSION_TAG}-arm64"
+          docker buildx imagetools create \
+            -t "$IMAGE_NAME:ubuntu-latest" \
+            "$IMAGE_NAME:ubuntu-latest-amd64" \
+            "$IMAGE_NAME:ubuntu-latest-arm64"
