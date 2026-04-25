@@ -92,7 +92,7 @@
           htop
           gcc
           go
-          gotools
+          # gotools
           golangci-lint
           gopls
           delve
