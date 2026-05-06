@@ -390,10 +390,10 @@
         ubuntuContainerImage =
           if isLinux then
             let
-              ubuntuImageDigest = "sha256:c4a8d5503dfb2a3eb8ab5f807da5bc69a85730fb49b5cfca2330194ebcc41c7b";
+              ubuntuImageDigest = "sha256:f3d28607ddd78734bb7f71f117f3c6706c666b8b76cbff7c9ff6e5718d46ff64";
               ubuntuImageHashes = {
-                "x86_64-linux" = "sha256-kb//V7K505fUXth8qHeVK1AlayGYCEYK5vZPidLFNjE=";
-                "aarch64-linux" = "sha256-A+huKbPcWFvrcBIZh4Khhcp4gWl0Fo+M98sR0wULxKY=";
+                "x86_64-linux" = "sha256-XJUlpcaH1N2CHmS3lKPnGpGWJqVCodVcKrdk0Sb7+8g=";
+                "aarch64-linux" = "sha256-t5WUnVfP5QdnaTV7biLReHxO34YQIy1qU6FLiF6JszI=";
               };
             in
             pkgs.dockerTools.buildImage {
