@@ -113,6 +113,7 @@
           claude-code
           gemini-cli
           codex
+          grok
           opencode
         ];
 
