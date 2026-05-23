@@ -111,7 +111,7 @@
 
         llmAgentPackages = with llm-agents.packages.${system}; [
           claude-code
-          gemini-cli
+          antigravity
           codex
           grok
           opencode
@@ -352,7 +352,8 @@
               command -v node >/dev/null
               command -v python >/dev/null
               command -v claude >/dev/null
-              command -v gemini >/dev/null
+              command -v antigravity >/dev/null
+              command -v grok > /dev/null
               command -v codex >/dev/null
 
               test -f ${installableEnv}/share/profile.d/00-env.sh
