@@ -111,10 +111,11 @@
 
         llmAgentPackages = with llm-agents.packages.${system}; [
           claude-code
-          antigravity
+          antigravity-cli
           codex
           grok
           opencode
+          hermes-agent
         ];
 
         # ---------------- Linux-only Packages ----------------
@@ -352,7 +353,7 @@
               command -v node >/dev/null
               command -v python >/dev/null
               command -v claude >/dev/null
-              command -v antigravity >/dev/null
+              command -v antigravity-cli >/dev/null
               command -v grok > /dev/null
               command -v codex >/dev/null
 
