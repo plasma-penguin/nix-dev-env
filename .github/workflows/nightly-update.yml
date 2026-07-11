@@ -77,14 +77,32 @@ jobs:
         run: |
           set -euo pipefail
 
-          PREFETCH_OUTPUT=$(nix run nixpkgs#nix-prefetch-docker -- "$UBUNTU_BASE_IMAGE" --image-tag "$UBUNTU_BASE_TAG" --arch "${{ matrix.arch }}" --os linux 2>&1)
-          IMAGE_DIGEST=$(printf '%s\n' "$PREFETCH_OUTPUT" | sed -n 's/^-> ImageDigest: //p' | tail -1)
-          IMAGE_HASH=$(printf '%s\n' "$PREFETCH_OUTPUT" | sed -n 's/^-> ImageHash: //p' | tail -1)
-
-          if [[ -z "$IMAGE_DIGEST" || -z "$IMAGE_HASH" ]]; then
-            printf '%s\n' "$PREFETCH_OUTPUT"
+          # nix-prefetch-docker prints "-> ImageDigest" diagnostics on stderr and the
+          # structured result on stdout. Use --json --quiet and parse stdout with jq.
+          if ! PREFETCH_JSON=$(
+            nix run nixpkgs#nix-prefetch-docker -- \
+              --image-name "$UBUNTU_BASE_IMAGE" \
+              --image-tag "$UBUNTU_BASE_TAG" \
+              --arch "${{ matrix.arch }}" \
+              --os linux \
+              --json \
+              --quiet
+          ); then
+            echo "nix-prefetch-docker failed" >&2
             exit 1
           fi
+
+          IMAGE_DIGEST=$(printf '%s\n' "$PREFETCH_JSON" | jq -r '.imageDigest // empty')
+          IMAGE_HASH=$(printf '%s\n' "$PREFETCH_JSON" | jq -r '.hash // empty')
+
+          if [[ -z "$IMAGE_DIGEST" || -z "$IMAGE_HASH" ]]; then
+            echo "failed to parse digest/hash from nix-prefetch-docker output:" >&2
+            printf '%s\n' "$PREFETCH_JSON" >&2
+            exit 1
+          fi
+
+          echo "imageDigest=$IMAGE_DIGEST"
+          echo "hash(${{ matrix.nix_system }})=$IMAGE_HASH"
 
           mkdir -p /tmp/ubuntu-base-pins
           printf '%s\n' "$IMAGE_DIGEST" > /tmp/ubuntu-base-pins/imageDigest

@@ -163,6 +163,9 @@
           export PLAYWRIGHT_BROWSERS_PATH=${browsers}
           export PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS=true
           export CHROME_PATH=${chromePath}
+
+          # OpenCode: allow all tools without prompts (outer VM/container isolation).
+          export OPENCODE_CONFIG_CONTENT='{"permission":"allow"}'
         '';
 
         profileCompletion = pkgs.writeText "10-completion.sh" ''
@@ -201,6 +204,49 @@
           command -v ls   >/dev/null 2>&1 && alias ls='ls --color=auto'
         '';
 
+        # Agents run inside an outer VM/container. Skip nested bwrap and
+        # approval prompts via a small profile.d snippet (same path as the
+        # rest of the shell setup).
+        profileAgents = pkgs.writeText "30-agents.sh" ''
+          # Grok: call the real launcher (no bwrap) in always-approve mode.
+          grok() {
+            local bin launcher
+            bin="$(readlink -f "$(type -P grok)")" || return 127
+            launcher="$(dirname "$bin")/../libexec/grok/grok-launcher"
+            if [ -x "$launcher" ]; then
+              "$launcher" --always-approve "$@"
+            else
+              command grok --always-approve "$@"
+            fi
+          }
+
+          agent() {
+            local bin launcher
+            bin="$(readlink -f "$(type -P agent)")" || return 127
+            launcher="$(dirname "$bin")/../libexec/grok/agent-launcher"
+            if [ -x "$launcher" ]; then
+              "$launcher" --always-approve "$@"
+            else
+              command agent --always-approve "$@"
+            fi
+          }
+
+          # Codex: no sandbox, no approvals.
+          codex() {
+            command codex --dangerously-bypass-approvals-and-sandbox "$@"
+          }
+
+          # Antigravity (agy): auto-approve tool permissions.
+          agy() {
+            command agy --dangerously-skip-permissions "$@"
+          }
+
+          # Claude Code: bypass permission prompts.
+          claude() {
+            command claude --dangerously-skip-permissions "$@"
+          }
+        '';
+
         userBashrc = pkgs.writeText "user.bashrc" ''
           if [ -f /etc/profile ]; then . /etc/profile; fi
         '';
@@ -210,6 +256,7 @@
           cp ${profileEnv}        "$out/share/profile.d/00-env.sh"
           cp ${profileCompletion} "$out/share/profile.d/10-completion.sh"
           cp ${profilePrompt}     "$out/share/profile.d/20-prompt.sh"
+          cp ${profileAgents}     "$out/share/profile.d/30-agents.sh"
           cp ${userBashrc}        "$out/share/skel/.bashrc"
         '';
 
@@ -235,6 +282,7 @@
           . ${profileEnv}
           . ${profileCompletion}
           . ${profilePrompt}
+          . ${profileAgents}
         '';
 
         containerProfile = pkgs.writeText "container-profile" ''
@@ -282,6 +330,7 @@
           "install -m 0644 ${profileEnv}        etc/profile.d/00-env.sh"
           "install -m 0644 ${profileCompletion} etc/profile.d/10-completion.sh"
           "install -m 0644 ${profilePrompt}     etc/profile.d/20-prompt.sh"
+          "install -m 0644 ${profileAgents}     etc/profile.d/30-agents.sh"
           ""
           "# Skeleton files"
           "install -m 0644 ${userBashrc} etc/skel/.bashrc"
@@ -354,17 +403,19 @@
               command -v python >/dev/null
               command -v claude >/dev/null
               command -v agy >/dev/null
-              command -v grok > /dev/null
+              command -v grok >/dev/null
               command -v codex >/dev/null
 
               test -f ${installableEnv}/share/profile.d/00-env.sh
               test -f ${installableEnv}/share/profile.d/10-completion.sh
               test -f ${installableEnv}/share/profile.d/20-prompt.sh
+              test -f ${installableEnv}/share/profile.d/30-agents.sh
               test -f ${installableEnv}/share/skel/.bashrc
 
               export HOME="$TMPDIR/home"
               mkdir -p "$HOME"
               . ${profileEnv}
+              . ${profileAgents}
 
               test "$GOPATH" = "$HOME/go"
               test "$GOBIN" = "$GOPATH/bin"
@@ -372,6 +423,17 @@
                 *":$GOBIN:"*) ;;
                 *) echo "GOBIN is missing from PATH" >&2; exit 1 ;;
               esac
+
+              test "$OPENCODE_CONFIG_CONTENT" = '{"permission":"allow"}'
+              type grok | grep -q function
+              type agent | grep -q function
+              type codex | grep -q function
+              type agy | grep -q function
+              type claude | grep -q function
+              grok --version >/dev/null
+              codex --help >/dev/null
+              agy --help >/dev/null
+              claude --help >/dev/null
 
               touch "$out"
             '';
