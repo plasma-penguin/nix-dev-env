@@ -28,8 +28,8 @@ ENV PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${NIX_DEV
 # the repo-standard nonroot account.
 RUN mkdir -p /etc/profile.d /etc/skel /app /home/nonroot && \
     cp "$NIX_DEV_ENV_PROFILE"/share/profile.d/*.sh /etc/profile.d/ && \
-    cp "$NIX_DEV_ENV_PROFILE"/share/skel/.bashrc /etc/skel/.bashrc && \
-    cp "$NIX_DEV_ENV_PROFILE"/share/skel/.bashrc /home/nonroot/.bashrc && \
+    cp -a "$NIX_DEV_ENV_PROFILE"/share/skel/. /etc/skel/ && \
+    cp -a "$NIX_DEV_ENV_PROFILE"/share/skel/. /home/nonroot/ && \
     printf '%s\n' 'for f in /etc/profile.d/*.sh; do' '  . "$f"' 'done' > /etc/profile && \
     echo '. /etc/profile' > /etc/bash.bashrc && \
     if ! grep -q '^nonroot:' /etc/passwd; then \
