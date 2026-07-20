@@ -77,6 +77,14 @@ jobs:
         run: |
           set -euo pipefail
 
+          # GitHub-hosted runners now ship /etc/containers/registries.conf in v1
+          # format, but skopeo/nix-prefetch-docker requires v2.
+          cat > /tmp/registries.conf <<'EOF'
+          unqualified-search-registries = ["docker.io"]
+          EOF
+          export CONTAINERS_REGISTRIES_CONF=/tmp/registries.conf
+          export REGISTRIES_CONFIG_PATH=/tmp/registries.conf
+
           # nix-prefetch-docker prints "-> ImageDigest" diagnostics on stderr and the
           # structured result on stdout. Use --json --quiet and parse stdout with jq.
           if ! PREFETCH_JSON=$(
