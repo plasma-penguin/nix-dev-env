@@ -455,7 +455,7 @@
         ubuntuContainerImage =
           if isLinux then
             let
-              ubuntuImageDigest = "sha256:4b928535d153630c63e51b8888cffa732b46c612712e6f8bc1370cbc99992558";
+              ubuntuImageDigest = "sha256:2260313b31c8c011cd2eebe728008efac1b3982be73eb71348ea2648d2c0e09b";
               ubuntuImageHashes = {
                 "x86_64-linux" = "sha256-1Qs2MTe5rfXNOWkl4tgrN2BTwvYsYupw0VHqlEUX/FI=";
                 "aarch64-linux" = "sha256-PXukMDsdB6N6bWzOEddPqRXZFB1Jhv/qlep1Ufqj5+k=";
