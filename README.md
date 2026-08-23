@@ -103,15 +103,19 @@ Build one or more variants with Docker:
 
 ```bash
 # Codex (uses the default build argument)
-docker build -f Dockerfile.sbx -t nix-dev-env-sbx:codex .
+docker build --provenance=false \
+  -f Dockerfile.sbx \
+  -t nix-dev-env-sbx:codex .
 
 # OpenCode
-docker build -f Dockerfile.sbx \
+docker build --provenance=false \
+  -f Dockerfile.sbx \
   --build-arg SBX_TEMPLATE_VARIANT=opencode-docker \
   -t nix-dev-env-sbx:opencode .
 
 # Agent-less shell
-docker build -f Dockerfile.sbx \
+docker build --provenance=false \
+  -f Dockerfile.sbx \
   --build-arg SBX_TEMPLATE_VARIANT=shell-docker \
   -t nix-dev-env-sbx:shell .
 ```
@@ -199,13 +203,27 @@ The [Makefile](/Users/plasma-penguin/code/nix-dev-env/Makefile) mirrors the flak
 
 GitHub Actions is split into two flows:
 
-- `CI` runs `nix flake check`, tests `nix shell` / `nix develop`, validates the Dockerfile image, and smoke-tests both Nix-built container images.
-- `Nightly Update` refreshes all flake inputs, repins the Ubuntu base image, validates the updated revision, and publishes the fresh images directly.
+- `CI` runs on every pull request and push to `main`. It runs `nix flake check`, tests `nix shell` / `nix develop`, validates the Dockerfile image, smoke-tests both Nix-built container images, and builds and smoke-tests all three Docker Sandbox variants on AMD64 and ARM64.
+- `Weekly Update` runs every Sunday at 06:00 UTC (and on demand), refreshes all flake inputs, repins the Ubuntu base image, validates the updated revision, and publishes the fresh images directly.
 
 Pushes to `main` publish the tested images to Docker Hub with:
 
 - scratch tags: `latest` and `sha-<commit>`
 - Ubuntu tags: `ubuntu-latest` and `ubuntu-sha-<commit>`
+
+The weekly workflow also publishes multi-architecture Docker Sandbox templates with moving and commit-specific tags:
+
+- Codex: `sbx-codex` and `sbx-codex-sha-<commit>`
+- Shell: `sbx-shell` and `sbx-shell-sha-<commit>`
+- OpenCode: `sbx-opencode` and `sbx-opencode-sha-<commit>`
+
+For example, with the default Docker Hub repository name:
+
+```bash
+sbx run \
+  --template docker.io/your-dockerhub-user/nix-dev-env:sbx-codex \
+  codex .
+```
 
 The publish jobs require:
 
