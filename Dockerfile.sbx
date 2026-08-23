@@ -1,0 +1,61 @@
+ARG SBX_TEMPLATE_VARIANT=codex-docker
+FROM docker/sandbox-templates:${SBX_TEMPLATE_VARIANT} AS sandbox-base
+
+# Build the repository's Nix profile without requiring Nix on the host or in
+# the final Docker Sandbox base image.
+FROM nixos/nix:latest AS nix-builder
+
+RUN printf '%s\n' \
+      'experimental-features = nix-command flakes' \
+      'extra-substituters = https://cache.numtide.com' \
+      'extra-trusted-public-keys = niks3.numtide.com-1:DTx8wZduET09hRmMtKdQDxNNthLQETkc/yaX7M4qK0g=' \
+      'sandbox = false' \
+    >> /etc/nix/nix.conf
+
+WORKDIR /tmp/nix-dev-env
+COPY flake.nix flake.lock ./
+
+ARG NIX_DEV_ENV_PROFILE=/nix/var/nix/profiles/nix-dev-env
+RUN nix profile add .#default --profile "$NIX_DEV_ENV_PROFILE"
+
+# Return to the selected Docker Sandbox template so sbx keeps its agent
+# runtime, isolated Docker Engine, credentials integration, entrypoint, and
+# agent user.
+FROM sandbox-base
+
+USER root
+
+ARG NIX_DEV_ENV_PROFILE=/nix/var/nix/profiles/nix-dev-env
+ENV NIX_DEV_ENV_PROFILE="$NIX_DEV_ENV_PROFILE"
+
+# The copied store includes Nix itself, the flake profile, and its complete
+# dependency closure. Ownership by `agent` keeps single-user Nix functional at
+# runtime without starting a Nix daemon inside the sandbox.
+COPY --chown=agent:agent --from=nix-builder /nix /nix
+
+RUN install -d -m 0755 /etc/nix /etc/profile.d && \
+    printf '%s\n' \
+      'experimental-features = nix-command flakes' \
+      'extra-substituters = https://cache.numtide.com' \
+      'extra-trusted-public-keys = niks3.numtide.com-1:DTx8wZduET09hRmMtKdQDxNNthLQETkc/yaX7M4qK0g=' \
+      'sandbox = false' \
+      > /etc/nix/nix.conf && \
+    for script in "$NIX_DEV_ENV_PROFILE"/share/profile.d/*.sh; do \
+      install -m 0644 "$script" "/etc/profile.d/nix-dev-env-$(basename "$script")"; \
+    done && \
+    printf '%s\n' \
+      '' \
+      '# nix-dev-env shell setup' \
+      'for f in /etc/profile.d/nix-dev-env-*.sh; do' \
+      '  [ -r "$f" ] && . "$f"' \
+      'done' \
+      >> /home/agent/.bashrc && \
+    chown agent:agent /home/agent/.bashrc
+
+# Preserve the selected template's PATH precedence (including any managed
+# agent CLI), then make all Nix-provided tools available as fallbacks.
+ENV PATH="${PATH}:${NIX_DEV_ENV_PROFILE}/bin:${NIX_DEV_ENV_PROFILE}/sbin:/nix/var/nix/profiles/default/bin"
+
+USER agent
+
+# Deliberately inherit the base image's WORKDIR, ENTRYPOINT, and CMD.
