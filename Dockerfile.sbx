@@ -1,9 +1,17 @@
 ARG SBX_TEMPLATE_VARIANT=codex-docker
-FROM docker/sandbox-templates:${SBX_TEMPLATE_VARIANT} AS sandbox-base
+
+# Pin the multi-architecture indexes so each source revision resolves to the
+# same upstream template on AMD64 and ARM64. The weekly update workflow keeps
+# these digests current.
+FROM docker/sandbox-templates:codex-docker@sha256:8dab63bd802d33e0ccf518e5afd0445c480f22b7fc63e7fbcd403ef2ea10908c AS codex-docker
+FROM docker/sandbox-templates:shell-docker@sha256:d86a6cdc105a1b299667a20c40bcf8d0584e56f21d44490a0737bb1baeb44299 AS shell-docker
+FROM docker/sandbox-templates:opencode-docker@sha256:aa55956da26087d7070630fcb0a423583e6591b465f3d757559533503b3906e2 AS opencode-docker
+
+FROM ${SBX_TEMPLATE_VARIANT} AS sandbox-base
 
 # Build the repository's Nix profile without requiring Nix on the host or in
 # the final Docker Sandbox base image.
-FROM nixos/nix:latest AS nix-builder
+FROM nixos/nix:latest@sha256:7a007c766426c1877758ddc5cb87a965ac131fc78c582ce0083d922d51ae945c AS nix-builder
 
 RUN printf '%s\n' \
       'experimental-features = nix-command flakes' \

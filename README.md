@@ -99,6 +99,11 @@ The template variant is selected at build time. Codex is the default:
 | OpenCode | `opencode-docker` | `nix-dev-env-sbx:opencode` |
 | Shell (no managed agent) | `shell-docker` | `nix-dev-env-sbx:shell` |
 
+The three Sandbox templates and the `nixos/nix` builder are pinned to their
+multi-architecture image digests in `Dockerfile.sbx`. The weekly update
+workflow refreshes those pins after verifying that each image still provides
+both AMD64 and ARM64 variants.
+
 Build one or more variants with Docker:
 
 ```bash
@@ -204,7 +209,7 @@ The [Makefile](/Users/plasma-penguin/code/nix-dev-env/Makefile) mirrors the flak
 GitHub Actions is split into two flows:
 
 - `CI` runs on every pull request and push to `main`. It runs `nix flake check`, tests `nix shell` / `nix develop`, validates the Dockerfile image, smoke-tests both Nix-built container images, and builds and smoke-tests all three Docker Sandbox variants on AMD64 and ARM64.
-- `Weekly Update` runs every Sunday at 06:00 UTC (and on demand), refreshes all flake inputs, repins the Ubuntu base image, validates the updated revision, and publishes the fresh images directly.
+- `Weekly Update` runs every Sunday at 06:00 UTC (and on demand), refreshes all flake inputs, repins the Ubuntu and Docker Sandbox base images, validates the updated revision, and publishes the fresh images directly.
 
 Pushes to `main` publish the tested images to Docker Hub with:
 

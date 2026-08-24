@@ -127,11 +127,67 @@ jobs:
           path: /tmp/ubuntu-base-pins
           retention-days: 1
 
+  repin-sbx-bases:
+    name: Repin Docker Sandbox bases
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Resolve multi-architecture image digests
+        run: |
+          set -euo pipefail
+
+          mkdir -p /tmp/sbx-base-pins
+
+          pin_image() {
+            local name="$1"
+            local reference="$2"
+            local manifest
+            local digest
+
+            manifest=$(docker buildx imagetools inspect \
+              --format '{{json .Manifest}}' \
+              "$reference")
+            digest=$(jq -r '.digest // empty' <<<"$manifest")
+
+            if ! [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "Invalid manifest digest for $reference: $digest" >&2
+              exit 1
+            fi
+
+            for arch in amd64 arm64; do
+              if ! jq -e --arg arch "$arch" '
+                any(
+                  .manifests[]?;
+                  .platform.os == "linux" and .platform.architecture == $arch
+                )
+              ' <<<"$manifest" >/dev/null; then
+                echo "$reference does not provide linux/$arch" >&2
+                exit 1
+              fi
+            done
+
+            printf '%s\n' "$digest" > "/tmp/sbx-base-pins/${name}.digest"
+            echo "$reference@$digest"
+          }
+
+          pin_image codex-docker docker.io/docker/sandbox-templates:codex-docker
+          pin_image shell-docker docker.io/docker/sandbox-templates:shell-docker
+          pin_image opencode-docker docker.io/docker/sandbox-templates:opencode-docker
+          pin_image nix-builder docker.io/nixos/nix:latest
+
+      - name: Upload Docker Sandbox base artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sbx-base-pins
+          path: /tmp/sbx-base-pins
+          retention-days: 1
+
   commit-updates:
     name: Commit weekly updates
     needs:
       - update-flake-lock
       - repin-ubuntu-base
+      - repin-sbx-bases
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -159,6 +215,12 @@ jobs:
           path: /tmp/ubuntu-base-pins
           merge-multiple: false
 
+      - name: Download Docker Sandbox base artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sbx-base-pins
+          path: /tmp/sbx-base-pins
+
       - name: Apply weekly updates
         run: |
           set -euo pipefail
@@ -183,12 +245,50 @@ jobs:
             sed -i "s|\"aarch64-linux\" = \"sha256-[^\"]*\";|\"aarch64-linux\" = \"$ARM64_HASH\";|" flake.nix
           fi
 
+          update_dockerfile_digest() {
+            local image="$1"
+            local tag="$2"
+            local stage="$3"
+            local pin_file="$4"
+            local digest
+            local pattern
+
+            digest=$(<"$pin_file")
+            if ! [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "Invalid digest in $pin_file: $digest" >&2
+              exit 1
+            fi
+
+            pattern="^FROM ${image}:${tag}@sha256:[0-9a-f]{64} AS ${stage}$"
+            if [[ $(grep -Ec "$pattern" Dockerfile.sbx) -ne 1 ]]; then
+              echo "Expected exactly one pinned $stage stage in Dockerfile.sbx" >&2
+              exit 1
+            fi
+
+            sed -i -E \
+              "s|^(FROM ${image}:${tag}@)sha256:[0-9a-f]{64}( AS ${stage})$|\\1${digest}\\2|" \
+              Dockerfile.sbx
+          }
+
+          update_dockerfile_digest \
+            docker/sandbox-templates codex-docker codex-docker \
+            /tmp/sbx-base-pins/codex-docker.digest
+          update_dockerfile_digest \
+            docker/sandbox-templates shell-docker shell-docker \
+            /tmp/sbx-base-pins/shell-docker.digest
+          update_dockerfile_digest \
+            docker/sandbox-templates opencode-docker opencode-docker \
+            /tmp/sbx-base-pins/opencode-docker.digest
+          update_dockerfile_digest \
+            nixos/nix latest nix-builder \
+            /tmp/sbx-base-pins/nix-builder.digest
+
       - name: Commit and push updates
         id: commit
         run: |
           set -euo pipefail
 
-          if git diff --quiet flake.lock flake.nix; then
+          if git diff --quiet flake.lock flake.nix Dockerfile.sbx; then
             echo "did_update=false" >> "$GITHUB_OUTPUT"
             echo "commit_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
             exit 0
@@ -196,8 +296,8 @@ jobs:
 
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add flake.lock flake.nix
-          git commit -m "chore: update flake inputs and Ubuntu base image"
+          git add flake.lock flake.nix Dockerfile.sbx
+          git commit -m "chore: update pinned dependencies"
           NEW_SHA=$(git rev-parse HEAD)
           git push origin HEAD:main
 
