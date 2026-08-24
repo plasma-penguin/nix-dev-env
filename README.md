@@ -208,19 +208,16 @@ The [Makefile](/Users/plasma-penguin/code/nix-dev-env/Makefile) mirrors the flak
 
 GitHub Actions is split into two flows:
 
-- `CI` runs on every pull request and push to `main`. It runs `nix flake check`, tests `nix shell` / `nix develop`, validates the Dockerfile image, smoke-tests both Nix-built container images, and builds and smoke-tests all three Docker Sandbox variants on AMD64 and ARM64.
+- `CI` runs on every pull request and push to `main`. It runs `nix flake check`, tests `nix shell` / `nix develop`, validates the Dockerfile image, smoke-tests both Nix-built container images, and builds and smoke-tests all three Docker Sandbox variants on AMD64 and ARM64. Pushes to `main` publish all of the tested images.
 - `Weekly Update` runs every Sunday at 06:00 UTC (and on demand), refreshes all flake inputs, repins the Ubuntu and Docker Sandbox base images, validates the updated revision, and publishes the fresh images directly.
 
-Pushes to `main` publish the tested images to Docker Hub with:
+Pushes to `main` and weekly dependency updates publish multi-architecture images to Docker Hub with:
 
 - scratch tags: `latest` and `sha-<commit>`
 - Ubuntu tags: `ubuntu-latest` and `ubuntu-sha-<commit>`
-
-The weekly workflow also publishes multi-architecture Docker Sandbox templates with moving and commit-specific tags:
-
-- Codex: `sbx-codex` and `sbx-codex-sha-<commit>`
-- Shell: `sbx-shell` and `sbx-shell-sha-<commit>`
-- OpenCode: `sbx-opencode` and `sbx-opencode-sha-<commit>`
+- Codex Sandbox tags: `sbx-codex` and `sbx-codex-sha-<commit>`
+- Shell Sandbox tags: `sbx-shell` and `sbx-shell-sha-<commit>`
+- OpenCode Sandbox tags: `sbx-opencode` and `sbx-opencode-sha-<commit>`
 
 For example, with the default Docker Hub repository name:
 
