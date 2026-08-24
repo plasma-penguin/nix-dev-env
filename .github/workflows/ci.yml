@@ -9,6 +9,11 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  # Serialize main publishing without restricting independent pull-request runs.
+  group: ${{ github.event_name == 'push' && 'main-write-and-publish' || github.run_id }}
+  queue: max
+
 jobs:
   linux:
     name: Linux checks (${{ matrix.arch }})

@@ -7,6 +7,10 @@ on:
 
 permissions: {}
 
+concurrency:
+  group: main-write-and-publish
+  queue: max
+
 jobs:
   merge-github-actions-updates:
     name: Merge tested GitHub Actions updates

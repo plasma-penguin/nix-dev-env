@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: main-write-and-publish
+  queue: max
+
 env:
   UBUNTU_BASE_IMAGE: ubuntu
   UBUNTU_BASE_TAG: "latest"
