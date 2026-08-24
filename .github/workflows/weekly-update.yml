@@ -1,12 +1,16 @@
-name: Nightly Update
+name: Weekly Update
 
 on:
   schedule:
-    - cron: "0 0 * * *"
+    - cron: "0 6 * * 0"
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: main-write-and-publish
+  queue: max
 
 env:
   UBUNTU_BASE_IMAGE: ubuntu
@@ -19,10 +23,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@main
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
         with:
           extra-conf: |
             experimental-features = nix-command flakes
@@ -37,7 +41,7 @@ jobs:
         run: nix flake update
 
       - name: Upload flake.lock artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: flake-lock
           path: flake.lock
@@ -59,10 +63,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@main
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
         with:
           extra-conf: |
             experimental-features = nix-command flakes
@@ -117,17 +121,73 @@ jobs:
           printf '%s\n' "$IMAGE_HASH" > "/tmp/ubuntu-base-pins/${{ matrix.nix_system }}.hash"
 
       - name: Upload Ubuntu base artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ubuntu-base-pins-${{ matrix.arch }}
           path: /tmp/ubuntu-base-pins
           retention-days: 1
 
+  repin-sbx-bases:
+    name: Repin Docker Sandbox bases
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Resolve multi-architecture image digests
+        run: |
+          set -euo pipefail
+
+          mkdir -p /tmp/sbx-base-pins
+
+          pin_image() {
+            local name="$1"
+            local reference="$2"
+            local manifest
+            local digest
+
+            manifest=$(docker buildx imagetools inspect \
+              --format '{{json .Manifest}}' \
+              "$reference")
+            digest=$(jq -r '.digest // empty' <<<"$manifest")
+
+            if ! [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "Invalid manifest digest for $reference: $digest" >&2
+              exit 1
+            fi
+
+            for arch in amd64 arm64; do
+              if ! jq -e --arg arch "$arch" '
+                any(
+                  .manifests[]?;
+                  .platform.os == "linux" and .platform.architecture == $arch
+                )
+              ' <<<"$manifest" >/dev/null; then
+                echo "$reference does not provide linux/$arch" >&2
+                exit 1
+              fi
+            done
+
+            printf '%s\n' "$digest" > "/tmp/sbx-base-pins/${name}.digest"
+            echo "$reference@$digest"
+          }
+
+          pin_image codex-docker docker.io/docker/sandbox-templates:codex-docker
+          pin_image shell-docker docker.io/docker/sandbox-templates:shell-docker
+          pin_image opencode-docker docker.io/docker/sandbox-templates:opencode-docker
+          pin_image nix-builder docker.io/nixos/nix:latest
+
+      - name: Upload Docker Sandbox base artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sbx-base-pins
+          path: /tmp/sbx-base-pins
+          retention-days: 1
+
   commit-updates:
-    name: Commit nightly updates
+    name: Commit weekly updates
     needs:
       - update-flake-lock
       - repin-ubuntu-base
+      - repin-sbx-bases
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -137,25 +197,31 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
       - name: Download flake.lock artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: flake-lock
           path: /tmp/flake-lock
 
       - name: Download Ubuntu base artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: ubuntu-base-pins-*
           path: /tmp/ubuntu-base-pins
           merge-multiple: false
 
-      - name: Apply nightly updates
+      - name: Download Docker Sandbox base artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sbx-base-pins
+          path: /tmp/sbx-base-pins
+
+      - name: Apply weekly updates
         run: |
           set -euo pipefail
 
@@ -179,12 +245,50 @@ jobs:
             sed -i "s|\"aarch64-linux\" = \"sha256-[^\"]*\";|\"aarch64-linux\" = \"$ARM64_HASH\";|" flake.nix
           fi
 
+          update_dockerfile_digest() {
+            local image="$1"
+            local tag="$2"
+            local stage="$3"
+            local pin_file="$4"
+            local digest
+            local pattern
+
+            digest=$(<"$pin_file")
+            if ! [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "Invalid digest in $pin_file: $digest" >&2
+              exit 1
+            fi
+
+            pattern="^FROM ${image}:${tag}@sha256:[0-9a-f]{64} AS ${stage}$"
+            if [[ $(grep -Ec "$pattern" Dockerfile.sbx) -ne 1 ]]; then
+              echo "Expected exactly one pinned $stage stage in Dockerfile.sbx" >&2
+              exit 1
+            fi
+
+            sed -i -E \
+              "s|^(FROM ${image}:${tag}@)sha256:[0-9a-f]{64}( AS ${stage})$|\\1${digest}\\2|" \
+              Dockerfile.sbx
+          }
+
+          update_dockerfile_digest \
+            docker/sandbox-templates codex-docker codex-docker \
+            /tmp/sbx-base-pins/codex-docker.digest
+          update_dockerfile_digest \
+            docker/sandbox-templates shell-docker shell-docker \
+            /tmp/sbx-base-pins/shell-docker.digest
+          update_dockerfile_digest \
+            docker/sandbox-templates opencode-docker opencode-docker \
+            /tmp/sbx-base-pins/opencode-docker.digest
+          update_dockerfile_digest \
+            nixos/nix latest nix-builder \
+            /tmp/sbx-base-pins/nix-builder.digest
+
       - name: Commit and push updates
         id: commit
         run: |
           set -euo pipefail
 
-          if git diff --quiet flake.lock flake.nix; then
+          if git diff --quiet flake.lock flake.nix Dockerfile.sbx; then
             echo "did_update=false" >> "$GITHUB_OUTPUT"
             echo "commit_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
             exit 0
@@ -192,8 +296,8 @@ jobs:
 
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add flake.lock flake.nix
-          git commit -m "chore: update flake inputs and Ubuntu base image"
+          git add flake.lock flake.nix Dockerfile.sbx
+          git commit -m "chore: update pinned dependencies"
           NEW_SHA=$(git rev-parse HEAD)
           git push origin HEAD:main
 
@@ -201,7 +305,7 @@ jobs:
           echo "commit_sha=$NEW_SHA" >> "$GITHUB_OUTPUT"
 
   verify-linux:
-    name: Verify nightly update on Linux (${{ matrix.arch }})
+    name: Verify weekly update on Linux (${{ matrix.arch }})
     needs: commit-updates
     if: ${{ needs.commit-updates.outputs.did_update == 'true' }}
     runs-on: ${{ matrix.runner }}
@@ -216,12 +320,12 @@ jobs:
 
     steps:
       - name: Checkout updated revision
-        uses: actions/checkout@v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.commit-updates.outputs.commit_sha }}
 
       - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@main
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
         with:
           extra-conf: |
             experimental-features = nix-command flakes
@@ -253,7 +357,7 @@ jobs:
         run: nix develop . -c bash -lc 'command -v gopls && command -v python && command -v shellcheck'
 
       - name: Build Dockerfile image
-        run: docker build -t dockerfile-built-nix-dev-env .
+        run: docker build --provenance=false -t dockerfile-built-nix-dev-env .
 
       - name: Smoke test Dockerfile image
         run: docker run --rm dockerfile-built-nix-dev-env bash -lc 'test "$(id -un)" = nonroot && test "$HOME" = /home/nonroot && test -w /app && command -v git && command -v tini'
@@ -271,18 +375,18 @@ jobs:
         run: docker run --rm nix-dev-env:latest bash -lc 'test "$(id -un)" = nonroot && test "$HOME" = /home/nonroot && test -w /app && command -v git'
 
       - name: Export scratch image artifact
-        run: docker save nix-dev-env:latest -o "nightly-scratch-image-${{ matrix.arch }}.tar"
+        run: docker save nix-dev-env:latest -o "weekly-scratch-image-${{ matrix.arch }}.tar"
 
       - name: Upload scratch image artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: nightly-scratch-image-${{ matrix.arch }}
-          path: nightly-scratch-image-${{ matrix.arch }}.tar
+          name: weekly-scratch-image-${{ matrix.arch }}
+          path: weekly-scratch-image-${{ matrix.arch }}.tar
           retention-days: 1
 
       - name: Cleanup Nix scratch image
         run: |
-          rm -f result "nightly-scratch-image-${{ matrix.arch }}.tar" || true
+          rm -f result "weekly-scratch-image-${{ matrix.arch }}.tar" || true
           docker image rm nix-dev-env:latest --force || true
 
       - name: Build Nix Ubuntu image
@@ -295,34 +399,34 @@ jobs:
         run: docker run --rm nix-dev-env-ubuntu:latest bash -lc 'test "$(id -un)" = nonroot && test "$HOME" = /home/nonroot && test -w /app && command -v git'
 
       - name: Export Ubuntu image artifact
-        run: docker save nix-dev-env-ubuntu:latest -o "nightly-ubuntu-image-${{ matrix.arch }}.tar"
+        run: docker save nix-dev-env-ubuntu:latest -o "weekly-ubuntu-image-${{ matrix.arch }}.tar"
 
       - name: Upload Ubuntu image artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: nightly-ubuntu-image-${{ matrix.arch }}
-          path: nightly-ubuntu-image-${{ matrix.arch }}.tar
+          name: weekly-ubuntu-image-${{ matrix.arch }}
+          path: weekly-ubuntu-image-${{ matrix.arch }}.tar
           retention-days: 1
 
       - name: Cleanup Nix Ubuntu image
         run: |
-          rm -f result "nightly-ubuntu-image-${{ matrix.arch }}.tar" || true
+          rm -f result "weekly-ubuntu-image-${{ matrix.arch }}.tar" || true
           docker image rm nix-dev-env-ubuntu:latest ubuntu:latest --force || true
 
   verify-macos:
-    name: Verify nightly update on macOS
+    name: Verify weekly update on macOS
     needs: commit-updates
     if: ${{ needs.commit-updates.outputs.did_update == 'true' }}
     runs-on: macos-latest
 
     steps:
       - name: Checkout updated revision
-        uses: actions/checkout@v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.commit-updates.outputs.commit_sha }}
 
       - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@main
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
         with:
           extra-conf: |
             experimental-features = nix-command flakes
@@ -354,7 +458,7 @@ jobs:
         run: nix develop . -c bash -lc 'command -v gopls && command -v python && command -v shellcheck'
 
   publish-scratch-images:
-    name: Publish nightly scratch images (${{ matrix.arch }})
+    name: Publish weekly scratch images (${{ matrix.arch }})
     needs:
       - commit-updates
       - verify-linux
@@ -373,13 +477,13 @@ jobs:
 
     steps:
       - name: Download scratch image artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: nightly-scratch-image-${{ matrix.arch }}
-          path: /tmp/nightly-scratch-image
+          name: weekly-scratch-image-${{ matrix.arch }}
+          path: /tmp/weekly-scratch-image
 
       - name: Load scratch image
-        run: docker load < "/tmp/nightly-scratch-image/nightly-scratch-image-${{ matrix.arch }}.tar"
+        run: docker load < "/tmp/weekly-scratch-image/weekly-scratch-image-${{ matrix.arch }}.tar"
 
       - name: Resolve Docker Hub image name
         env:
@@ -395,7 +499,7 @@ jobs:
           echo "IMAGE_NAME=$IMAGE_NAME" >> "$GITHUB_ENV"
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -410,7 +514,7 @@ jobs:
           docker push "$IMAGE_NAME:latest-${{ matrix.arch }}"
 
   publish-scratch-manifests:
-    name: Publish nightly scratch manifests
+    name: Publish weekly scratch manifests
     needs:
       - commit-updates
       - publish-scratch-images
@@ -433,10 +537,10 @@ jobs:
           echo "IMAGE_NAME=$IMAGE_NAME" >> "$GITHUB_ENV"
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -455,7 +559,7 @@ jobs:
             "$IMAGE_NAME:latest-arm64"
 
   publish-ubuntu-images:
-    name: Publish nightly Ubuntu images (${{ matrix.arch }})
+    name: Publish weekly Ubuntu images (${{ matrix.arch }})
     needs:
       - commit-updates
       - verify-linux
@@ -474,13 +578,13 @@ jobs:
 
     steps:
       - name: Download Ubuntu image artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: nightly-ubuntu-image-${{ matrix.arch }}
-          path: /tmp/nightly-ubuntu-image
+          name: weekly-ubuntu-image-${{ matrix.arch }}
+          path: /tmp/weekly-ubuntu-image
 
       - name: Load Ubuntu image
-        run: docker load < "/tmp/nightly-ubuntu-image/nightly-ubuntu-image-${{ matrix.arch }}.tar"
+        run: docker load < "/tmp/weekly-ubuntu-image/weekly-ubuntu-image-${{ matrix.arch }}.tar"
 
       - name: Resolve Docker Hub image name
         env:
@@ -496,7 +600,7 @@ jobs:
           echo "IMAGE_NAME=$IMAGE_NAME" >> "$GITHUB_ENV"
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -511,7 +615,7 @@ jobs:
           docker push "$IMAGE_NAME:ubuntu-latest-${{ matrix.arch }}"
 
   publish-ubuntu-manifests:
-    name: Publish nightly Ubuntu manifests
+    name: Publish weekly Ubuntu manifests
     needs:
       - commit-updates
       - publish-ubuntu-images
@@ -534,10 +638,10 @@ jobs:
           echo "IMAGE_NAME=$IMAGE_NAME" >> "$GITHUB_ENV"
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -554,3 +658,163 @@ jobs:
             -t "$IMAGE_NAME:ubuntu-latest" \
             "$IMAGE_NAME:ubuntu-latest-amd64" \
             "$IMAGE_NAME:ubuntu-latest-arm64"
+
+  publish-sbx-images:
+    name: Publish weekly SBX templates (${{ matrix.arch }})
+    needs:
+      - commit-updates
+      - verify-linux
+      - verify-macos
+    if: ${{ needs.commit-updates.outputs.did_update == 'true' }}
+    runs-on: ${{ matrix.runner }}
+    environment: dockerhub
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout weekly revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.commit-updates.outputs.commit_sha }}
+
+      - name: Resolve Docker Hub image name
+        env:
+          DOCKERHUB_REPO: ${{ secrets.DOCKERHUB_REPO }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${DOCKERHUB_REPO:-}" ]]; then
+            IMAGE_NAME="$DOCKERHUB_REPO"
+          else
+            IMAGE_NAME="$DOCKERHUB_USERNAME/nix-dev-env"
+          fi
+          echo "IMAGE_NAME=$IMAGE_NAME" >> "$GITHUB_ENV"
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build, test, and push arch-specific SBX tags
+        env:
+          ARCH: ${{ matrix.arch }}
+          COMMIT_SHA: ${{ needs.commit-updates.outputs.commit_sha }}
+        run: |
+          set -euo pipefail
+
+          build_template() {
+            local agent="$1"
+            local variant="$2"
+            local version_tag="sbx-${agent}-sha-${COMMIT_SHA}"
+            local version_image="$IMAGE_NAME:${version_tag}-${ARCH}"
+            local latest_image="$IMAGE_NAME:sbx-${agent}-${ARCH}"
+
+            docker build \
+              --pull \
+              --platform "linux/${ARCH}" \
+              --provenance=false \
+              --build-arg "SBX_TEMPLATE_VARIANT=${variant}" \
+              -f Dockerfile.sbx \
+              -t "$version_image" \
+              .
+
+            docker run --rm \
+              --entrypoint /bin/bash \
+              "$version_image" \
+              -lc '
+                set -euo pipefail
+                test "$(id -un)" = agent
+                command -v nix
+                command -v docker
+              '
+
+            case "$agent" in
+              codex)
+                docker run --rm \
+                  --entrypoint /bin/bash \
+                  "$version_image" \
+                  -lc 'test "$(type -P codex)" = /usr/local/share/npm-global/bin/codex'
+                ;;
+              opencode)
+                docker run --rm \
+                  --entrypoint /bin/bash \
+                  "$version_image" \
+                  -lc 'test "$(type -P opencode)" = /usr/local/share/npm-global/bin/opencode'
+                ;;
+              shell)
+                docker run --rm \
+                  --entrypoint /bin/bash \
+                  "$version_image" \
+                  -lc '
+                    test "$(type -P codex)" = /nix/var/nix/profiles/nix-dev-env/bin/codex
+                    test "$(type -P opencode)" = /nix/var/nix/profiles/nix-dev-env/bin/opencode
+                    command -v git
+                    command -v bash
+                  '
+                ;;
+            esac
+
+            docker push "$version_image"
+            docker tag "$version_image" "$latest_image"
+            docker push "$latest_image"
+            docker image rm "$version_image" "$latest_image" --force
+          }
+
+          build_template codex codex-docker
+          build_template shell shell-docker
+          build_template opencode opencode-docker
+
+  publish-sbx-manifests:
+    name: Publish weekly SBX manifests
+    needs:
+      - commit-updates
+      - publish-sbx-images
+    if: ${{ needs.commit-updates.outputs.did_update == 'true' }}
+    runs-on: ubuntu-latest
+    environment: dockerhub
+
+    steps:
+      - name: Resolve Docker Hub image name
+        env:
+          DOCKERHUB_REPO: ${{ secrets.DOCKERHUB_REPO }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${DOCKERHUB_REPO:-}" ]]; then
+            IMAGE_NAME="$DOCKERHUB_REPO"
+          else
+            IMAGE_NAME="$DOCKERHUB_USERNAME/nix-dev-env"
+          fi
+          echo "IMAGE_NAME=$IMAGE_NAME" >> "$GITHUB_ENV"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Push multi-architecture SBX manifests
+        run: |
+          set -euo pipefail
+
+          for agent in codex shell opencode; do
+            VERSION_TAG="sbx-${agent}-sha-${{ needs.commit-updates.outputs.commit_sha }}"
+            docker buildx imagetools create \
+              -t "$IMAGE_NAME:${VERSION_TAG}" \
+              "$IMAGE_NAME:${VERSION_TAG}-amd64" \
+              "$IMAGE_NAME:${VERSION_TAG}-arm64"
+            docker buildx imagetools create \
+              -t "$IMAGE_NAME:sbx-${agent}" \
+              "$IMAGE_NAME:sbx-${agent}-amd64" \
+              "$IMAGE_NAME:sbx-${agent}-arm64"
+          done

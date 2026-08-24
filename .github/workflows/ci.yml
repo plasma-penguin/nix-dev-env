@@ -9,6 +9,11 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  # Serialize main publishing without restricting independent pull-request runs.
+  group: ${{ github.event_name == 'push' && 'main-write-and-publish' || github.run_id }}
+  queue: max
+
 jobs:
   linux:
     name: Linux checks (${{ matrix.arch }})
@@ -24,10 +29,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@main
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
         with:
           extra-conf: |
             experimental-features = nix-command flakes
@@ -59,7 +64,7 @@ jobs:
         run: nix develop . -c bash -lc 'command -v gopls && command -v python && command -v shellcheck'
 
       - name: Build Dockerfile image
-        run: docker build -t dockerfile-built-nix-dev-env .
+        run: docker build --provenance=false -t dockerfile-built-nix-dev-env .
 
       - name: Smoke test Dockerfile image
         run: docker run --rm dockerfile-built-nix-dev-env bash -lc 'test "$(id -un)" = nonroot && test "$HOME" = /home/nonroot && test -w /app && command -v git && command -v tini'
@@ -82,7 +87,7 @@ jobs:
 
       - name: Upload scratch image artifact
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'plasma-penguin/nix-dev-env' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: scratch-image-${{ matrix.arch }}
           path: scratch-image-${{ matrix.arch }}.tar
@@ -108,7 +113,7 @@ jobs:
 
       - name: Upload Ubuntu image artifact
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'plasma-penguin/nix-dev-env' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ubuntu-image-${{ matrix.arch }}
           path: ubuntu-image-${{ matrix.arch }}.tar
@@ -119,16 +124,107 @@ jobs:
           rm -f result "ubuntu-image-${{ matrix.arch }}.tar" || true
           docker image rm nix-dev-env-ubuntu:latest ubuntu:latest --force || true
 
+  sbx:
+    name: Docker Sandbox checks (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Validate template variants
+        run: |
+          set -euo pipefail
+
+          for variant in codex-docker shell-docker opencode-docker; do
+            docker build \
+              --check \
+              --build-arg "SBX_TEMPLATE_VARIANT=${variant}" \
+              -f Dockerfile.sbx \
+              .
+          done
+
+      - name: Build and smoke-test templates
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+
+          build_template() {
+            local agent="$1"
+            local variant="$2"
+            local image="nix-dev-env-sbx:${agent}-ci"
+
+            docker build \
+              --pull \
+              --platform "linux/${ARCH}" \
+              --provenance=false \
+              --build-arg "SBX_TEMPLATE_VARIANT=${variant}" \
+              -f Dockerfile.sbx \
+              -t "$image" \
+              .
+
+            docker run --rm \
+              --entrypoint /bin/bash \
+              "$image" \
+              -lc '
+                set -euo pipefail
+                test "$(id -un)" = agent
+                command -v nix
+                command -v docker
+              '
+
+            case "$agent" in
+              codex)
+                docker run --rm \
+                  --entrypoint /bin/bash \
+                  "$image" \
+                  -lc 'test "$(type -P codex)" = /usr/local/share/npm-global/bin/codex'
+                ;;
+              opencode)
+                docker run --rm \
+                  --entrypoint /bin/bash \
+                  "$image" \
+                  -lc 'test "$(type -P opencode)" = /usr/local/share/npm-global/bin/opencode'
+                ;;
+              shell)
+                docker run --rm \
+                  --entrypoint /bin/bash \
+                  "$image" \
+                  -lc '
+                    test "$(type -P codex)" = /nix/var/nix/profiles/nix-dev-env/bin/codex
+                    test "$(type -P opencode)" = /nix/var/nix/profiles/nix-dev-env/bin/opencode
+                    command -v git
+                    command -v bash
+                  '
+                ;;
+            esac
+
+            docker image rm "$image" --force
+          }
+
+          build_template codex codex-docker
+          build_template shell shell-docker
+          build_template opencode opencode-docker
+
   macos:
     name: macOS checks
     runs-on: macos-latest
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@main
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
         with:
           extra-conf: |
             experimental-features = nix-command flakes
@@ -164,6 +260,7 @@ jobs:
     needs:
       - linux
       - macos
+      - sbx
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'plasma-penguin/nix-dev-env' }}
     runs-on: ${{ matrix.runner }}
     environment: dockerhub
@@ -178,7 +275,7 @@ jobs:
 
     steps:
       - name: Download scratch image artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: scratch-image-${{ matrix.arch }}
           path: /tmp/scratch-image
@@ -200,7 +297,7 @@ jobs:
           echo "IMAGE_NAME=$IMAGE_NAME" >> "$GITHUB_ENV"
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -236,10 +333,10 @@ jobs:
           echo "IMAGE_NAME=$IMAGE_NAME" >> "$GITHUB_ENV"
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -262,6 +359,7 @@ jobs:
     needs:
       - linux
       - macos
+      - sbx
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'plasma-penguin/nix-dev-env' }}
     runs-on: ${{ matrix.runner }}
     environment: dockerhub
@@ -276,7 +374,7 @@ jobs:
 
     steps:
       - name: Download Ubuntu image artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ubuntu-image-${{ matrix.arch }}
           path: /tmp/ubuntu-image
@@ -298,7 +396,7 @@ jobs:
           echo "IMAGE_NAME=$IMAGE_NAME" >> "$GITHUB_ENV"
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -334,10 +432,10 @@ jobs:
           echo "IMAGE_NAME=$IMAGE_NAME" >> "$GITHUB_ENV"
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}

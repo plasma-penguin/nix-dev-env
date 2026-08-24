@@ -1,0 +1,127 @@
+name: Dependabot Auto-Merge
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: main-write-and-publish
+  queue: max
+
+jobs:
+  merge-github-actions-updates:
+    name: Merge tested GitHub Actions updates
+    if: ${{ github.repository == 'plasma-penguin/nix-dev-env' }}
+    runs-on: ubuntu-latest
+    permissions:
+      # Read completed CI runs and merge only the exact revision they tested.
+      actions: read
+      contents: write
+      pull-requests: write
+
+    steps:
+      # This privileged workflow deliberately does not check out or execute PR code.
+      - name: Verify and merge tested updates
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          mapfile -t PR_NUMBERS < <(
+            gh api --paginate --method GET "repos/${REPOSITORY}/pulls" \
+              -f state=open \
+              -f base=main \
+              -f per_page=100 \
+              --jq '.[] |
+                select(.user.login == "dependabot[bot]") |
+                select(.head.repo.full_name == .base.repo.full_name) |
+                select(.head.ref | startswith("dependabot/github_actions/")) |
+                .number'
+          )
+
+          for PR_NUMBER in "${PR_NUMBERS[@]}"; do
+            PR_JSON=$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")
+            HEAD_SHA=$(jq -r '.head.sha' <<<"$PR_JSON")
+            HEAD_REF=$(jq -r '.head.ref' <<<"$PR_JSON")
+            HEAD_REPO=$(jq -r '.head.repo.full_name' <<<"$PR_JSON")
+            BASE_REF=$(jq -r '.base.ref' <<<"$PR_JSON")
+            AUTHOR=$(jq -r '.user.login' <<<"$PR_JSON")
+            STATE=$(jq -r '.state' <<<"$PR_JSON")
+            DRAFT=$(jq -r '.draft' <<<"$PR_JSON")
+
+            if [[ "$AUTHOR" != "dependabot[bot]" ||
+                  "$HEAD_REPO" != "$REPOSITORY" ||
+                  "$HEAD_REF" != dependabot/github_actions/* ||
+                  "$BASE_REF" != "main" ||
+                  "$STATE" != "open" ||
+                  "$DRAFT" != "false" ]]; then
+              echo "Pull request metadata did not satisfy the auto-merge policy."
+              exit 1
+            fi
+
+            mapfile -t CHANGED_FILES < <(
+              gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" \
+                --jq '.[].filename'
+            )
+
+            if (( ${#CHANGED_FILES[@]} == 0 )); then
+              echo "Pull request contains no changed files."
+              exit 1
+            fi
+
+            for file in "${CHANGED_FILES[@]}"; do
+              if ! [[ "$file" =~ ^\.github/workflows/[^/]+\.ya?ml$ ]]; then
+                echo "Pull request changes a path outside the workflow allowlist."
+                exit 1
+              fi
+            done
+
+            RUNS_JSON=$(
+              gh api --method GET "repos/${REPOSITORY}/actions/workflows/ci.yml/runs" \
+                -f event=pull_request \
+                -f status=success \
+                -f "head_sha=${HEAD_SHA}" \
+                -f per_page=100
+            )
+
+            RUN_JSON=$(
+              jq -c --argjson pr "$PR_NUMBER" '
+                [
+                  .workflow_runs[]
+                  | select(.conclusion == "success")
+                  | select(any(.pull_requests[]?; .number == $pr))
+                ]
+                | sort_by(.created_at)
+                | last // empty
+              ' <<<"$RUNS_JSON"
+            )
+
+            if [[ -z "$RUN_JSON" ]]; then
+              echo "No successful CI run exists for the current pull request revision."
+              continue
+            fi
+
+            TESTED_BASE_SHA=$(
+              jq -r --argjson pr "$PR_NUMBER" '
+                [.pull_requests[] | select(.number == $pr)][0].base.sha // empty
+              ' <<<"$RUN_JSON"
+            )
+            CURRENT_MAIN_SHA=$(
+              gh api "repos/${REPOSITORY}/git/ref/heads/main" --jq '.object.sha'
+            )
+
+            if [[ -z "$TESTED_BASE_SHA" || "$TESTED_BASE_SHA" != "$CURRENT_MAIN_SHA" ]]; then
+              echo "CI did not test this update against the current main revision."
+              continue
+            fi
+
+            gh pr merge "$PR_NUMBER" \
+              --repo "$REPOSITORY" \
+              --squash \
+              --delete-branch \
+              --match-head-commit "$HEAD_SHA"
+          done
