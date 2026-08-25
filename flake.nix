@@ -64,6 +64,7 @@
           zip
           unzip
           gnutar
+          gnupg
           xz
           ripgrep
           fd
@@ -71,6 +72,9 @@
           fzf
           delta
           eza
+
+          # Media capture & processing
+          ffmpeg
 
           # Networking & diagnostics
           openssh
@@ -398,6 +402,8 @@
 
               command -v bash >/dev/null
               command -v git >/dev/null
+              command -v gpg >/dev/null
+              command -v ffmpeg >/dev/null
               command -v go >/dev/null
               command -v node >/dev/null
               command -v python >/dev/null
