@@ -106,6 +106,7 @@
 
           # Dev & build
           git
+          gh
           git-lfs
           gnumake
           shellcheck
