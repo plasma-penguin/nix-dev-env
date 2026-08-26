@@ -360,7 +360,7 @@ jobs:
         run: docker build --provenance=false -t dockerfile-built-nix-dev-env .
 
       - name: Smoke test Dockerfile image
-        run: docker run --rm dockerfile-built-nix-dev-env bash -lc 'test "$(id -un)" = nonroot && test "$HOME" = /home/nonroot && test -w /app && command -v git && command -v tini'
+        run: docker run --rm dockerfile-built-nix-dev-env bash -lc 'test "$(id -un)" = nonroot && test "$HOME" = /home/nonroot && test -w /app && command -v git && command -v tini && tmux -L nix-dev-env-smoke new-session -d && test "$(tmux -L nix-dev-env-smoke show-options -gv mouse)" = on && tmux -L nix-dev-env-smoke kill-server'
 
       - name: Cleanup Dockerfile image
         run: docker image rm dockerfile-built-nix-dev-env:latest --force || true
@@ -372,7 +372,7 @@ jobs:
         run: docker load < result
 
       - name: Smoke test Nix scratch image
-        run: docker run --rm nix-dev-env:latest bash -lc 'test "$(id -un)" = nonroot && test "$HOME" = /home/nonroot && test -w /app && command -v git'
+        run: docker run --rm nix-dev-env:latest bash -lc 'test "$(id -un)" = nonroot && test "$HOME" = /home/nonroot && test -w /app && command -v git && tmux -L nix-dev-env-smoke new-session -d && test "$(tmux -L nix-dev-env-smoke show-options -gv mouse)" = on && tmux -L nix-dev-env-smoke kill-server'
 
       - name: Export scratch image artifact
         run: docker save nix-dev-env:latest -o "weekly-scratch-image-${{ matrix.arch }}.tar"
@@ -396,7 +396,7 @@ jobs:
         run: docker load < result
 
       - name: Smoke test Nix Ubuntu image
-        run: docker run --rm nix-dev-env-ubuntu:latest bash -lc 'test "$(id -un)" = nonroot && test "$HOME" = /home/nonroot && test -w /app && command -v git'
+        run: docker run --rm nix-dev-env-ubuntu:latest bash -lc 'test "$(id -un)" = nonroot && test "$HOME" = /home/nonroot && test -w /app && command -v git && tmux -L nix-dev-env-smoke new-session -d && test "$(tmux -L nix-dev-env-smoke show-options -gv mouse)" = on && tmux -L nix-dev-env-smoke kill-server'
 
       - name: Export Ubuntu image artifact
         run: docker save nix-dev-env-ubuntu:latest -o "weekly-ubuntu-image-${{ matrix.arch }}.tar"
@@ -733,6 +733,13 @@ jobs:
                 test "$(id -un)" = agent
                 command -v nix
                 command -v docker
+                test -r "$SSL_CERT_FILE"
+                . /etc/profile.d/nix-dev-env-00-env.sh
+                test "$SSL_CERT_FILE" = /etc/ssl/certs/ca-certificates.crt
+                test "$SSL_CERT_DIR" = /etc/ssl/certs
+                tmux -L nix-dev-env-smoke new-session -d
+                test "$(tmux -L nix-dev-env-smoke show-options -gv mouse)" = on
+                tmux -L nix-dev-env-smoke kill-server
               '
 
             case "$agent" in

@@ -28,6 +28,8 @@ ENV PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${NIX_DEV
 # the repo-standard nonroot account.
 RUN mkdir -p /etc/profile.d /etc/skel /app /home/nonroot && \
     cp "$NIX_DEV_ENV_PROFILE"/share/profile.d/*.sh /etc/profile.d/ && \
+    printf '\n' >> /etc/tmux.conf && \
+    cat "$NIX_DEV_ENV_PROFILE"/share/tmux/tmux.conf >> /etc/tmux.conf && \
     cp -a "$NIX_DEV_ENV_PROFILE"/share/skel/. /etc/skel/ && \
     cp -a "$NIX_DEV_ENV_PROFILE"/share/skel/. /home/nonroot/ && \
     printf '%s\n' 'for f in /etc/profile.d/*.sh; do' '  . "$f"' 'done' > /etc/profile && \
