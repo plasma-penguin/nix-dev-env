@@ -255,13 +255,18 @@
           if [ -f /etc/profile ]; then . /etc/profile; fi
         '';
 
+        tmuxConfig = pkgs.writeText "tmux.conf" ''
+          set -g mouse on
+        '';
+
         shellSupport = pkgs.runCommand "nix-dev-env-shell-support" { } ''
-          mkdir -p "$out/share/profile.d" "$out/share/skel"
+          mkdir -p "$out/share/profile.d" "$out/share/skel" "$out/share/tmux"
           cp ${profileEnv}        "$out/share/profile.d/00-env.sh"
           cp ${profileCompletion} "$out/share/profile.d/10-completion.sh"
           cp ${profilePrompt}     "$out/share/profile.d/20-prompt.sh"
           cp ${profileAgents}     "$out/share/profile.d/30-agents.sh"
           cp ${userBashrc}        "$out/share/skel/.bashrc"
+          cp ${tmuxConfig}        "$out/share/tmux/tmux.conf"
         '';
 
         installableEnv = pkgs.buildEnv {
@@ -329,6 +334,7 @@
           ""
           "# Global profile loader"
           "install -m 0644 ${containerProfile} etc/profile"
+          "install -m 0644 ${tmuxConfig} etc/tmux.conf"
           ""
           "# Profile snippets"
           "install -m 0644 ${profileEnv}        etc/profile.d/00-env.sh"
@@ -417,6 +423,11 @@
               test -f ${installableEnv}/share/profile.d/20-prompt.sh
               test -f ${installableEnv}/share/profile.d/30-agents.sh
               test -f ${installableEnv}/share/skel/.bashrc
+              test -f ${installableEnv}/share/tmux/tmux.conf
+
+              tmux -L nix-dev-env-smoke -f ${installableEnv}/share/tmux/tmux.conf new-session -d
+              test "$(tmux -L nix-dev-env-smoke show-options -gv mouse)" = "on"
+              tmux -L nix-dev-env-smoke kill-server
 
               export HOME="$TMPDIR/home"
               mkdir -p "$HOME"
