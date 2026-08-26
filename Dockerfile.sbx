@@ -36,6 +36,11 @@ USER root
 ARG NIX_DEV_ENV_PROFILE=/nix/var/nix/profiles/nix-dev-env
 ENV NIX_DEV_ENV_PROFILE="$NIX_DEV_ENV_PROFILE"
 
+# Docker Sandbox adds its HTTPS proxy CA to the system trust store at runtime.
+# Set these before the Nix profile loads so its fallback bundle does not hide it.
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+    SSL_CERT_DIR=/etc/ssl/certs
+
 # The copied store includes Nix itself, the flake profile, and its complete
 # dependency closure. Ownership by `agent` keeps single-user Nix functional at
 # runtime without starting a Nix daemon inside the sandbox.

@@ -160,8 +160,8 @@
           esac
 
           # TLS trust
-          export SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
-          export SSL_CERT_DIR=${pkgs.cacert}/etc/ssl/certs
+          export SSL_CERT_FILE="''${SSL_CERT_FILE:-${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt}"
+          export SSL_CERT_DIR="''${SSL_CERT_DIR:-${pkgs.cacert}/etc/ssl/certs}"
 
           # Playwright
           export PLAYWRIGHT_BROWSERS_PATH=${browsers}
