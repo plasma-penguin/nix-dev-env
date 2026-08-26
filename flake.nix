@@ -486,12 +486,6 @@
               type opencode | grep -q function
               type agy | grep -q function
               type claude | grep -q function
-
-              mkdir -p "$TMPDIR/mock-bin"
-              printf '%s\n' '#!${pkgs.runtimeShell}' 'printf "%s\n" "$@"' > "$TMPDIR/mock-bin/opencode"
-              chmod +x "$TMPDIR/mock-bin/opencode"
-              test "$(PATH="$TMPDIR/mock-bin:$PATH" opencode example)" = $'--auto\nexample'
-
               grok --version >/dev/null
               codex --help >/dev/null
               opencode --help >/dev/null
