@@ -21,7 +21,7 @@
       let
         pkgs = nixpkgs.legacyPackages.${system};
         inherit (pkgs) lib;
-        inherit (pkgs.stdenv) isLinux;
+        isLinux = pkgs.stdenv.hostPlatform.isLinux;
         repoDescription = "Cross-platform Nix development environment with scratch and Ubuntu container images";
         sourceUrl = "https://github.com/plasma-penguin/nix-dev-env";
 
