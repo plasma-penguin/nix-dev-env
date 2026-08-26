@@ -38,6 +38,23 @@
         );
         chromePath = "${browsers}/${chromiumDir}/${chromeSubdir}/chrome";
 
+        tmuxConfig = pkgs.writeText "tmux.conf" ''
+          set -g mouse on
+        '';
+
+        # Put the environment defaults in tmux's native system-config slot so
+        # host and user configuration continue to load through the usual paths.
+        tmuxSystemConfig = pkgs.writeTextDir "tmux.conf" ''
+          source-file ${tmuxConfig}
+          source-file -q /etc/tmux.conf
+        '';
+
+        tmuxWithConfig = pkgs.tmux.overrideAttrs (old: {
+          configureFlags =
+            lib.filter (flag: !(lib.hasPrefix "--sysconfdir=" flag)) (old.configureFlags or [ ])
+            ++ [ "--sysconfdir=${tmuxSystemConfig}" ];
+        });
+
         # ---------------- Cross-platform Packages ----------------
         commonPackages = with pkgs; [
           # Shell & UX
@@ -92,7 +109,7 @@
           git-lfs
           gnumake
           shellcheck
-          tmux
+          tmuxWithConfig
           htop
           gcc
           go
@@ -255,10 +272,6 @@
           if [ -f /etc/profile ]; then . /etc/profile; fi
         '';
 
-        tmuxConfig = pkgs.writeText "tmux.conf" ''
-          set -g mouse on
-        '';
-
         shellSupport = pkgs.runCommand "nix-dev-env-shell-support" { } ''
           mkdir -p "$out/share/profile.d" "$out/share/skel" "$out/share/tmux"
           cp ${profileEnv}        "$out/share/profile.d/00-env.sh"
@@ -334,7 +347,8 @@
           ""
           "# Global profile loader"
           "install -m 0644 ${containerProfile} etc/profile"
-          "install -m 0644 ${tmuxConfig} etc/tmux.conf"
+          "printf '\\n' >> etc/tmux.conf"
+          "cat ${tmuxConfig} >> etc/tmux.conf"
           ""
           "# Profile snippets"
           "install -m 0644 ${profileEnv}        etc/profile.d/00-env.sh"
@@ -425,13 +439,30 @@
               test -f ${installableEnv}/share/skel/.bashrc
               test -f ${installableEnv}/share/tmux/tmux.conf
 
-              tmux -L nix-dev-env-smoke -f ${installableEnv}/share/tmux/tmux.conf new-session -d
+              export HOME="$TMPDIR/home"
+              export TMUX_TMPDIR="$TMPDIR/tmux"
+              mkdir -p "$HOME" "$TMUX_TMPDIR"
+
+              tmux -L nix-dev-env-smoke new-session -d
               test "$(tmux -L nix-dev-env-smoke show-options -gv mouse)" = "on"
               tmux -L nix-dev-env-smoke kill-server
 
-              export HOME="$TMPDIR/home"
-              mkdir -p "$HOME"
+              printf '%s\n' 'set -g mouse off' > "$HOME/.tmux.conf"
+              tmux -L nix-dev-env-user-config-smoke new-session -d
+              test "$(tmux -L nix-dev-env-user-config-smoke show-options -gv mouse)" = "off"
+              tmux -L nix-dev-env-user-config-smoke kill-server
+
+              export SSL_CERT_FILE="$TMPDIR/proxy-ca-bundle.crt"
+              export SSL_CERT_DIR="$TMPDIR/proxy-ca-directory"
               . ${profileEnv}
+              test "$SSL_CERT_FILE" = "$TMPDIR/proxy-ca-bundle.crt"
+              test "$SSL_CERT_DIR" = "$TMPDIR/proxy-ca-directory"
+
+              unset SSL_CERT_FILE SSL_CERT_DIR
+              . ${profileEnv}
+              test "$SSL_CERT_FILE" = ${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
+              test "$SSL_CERT_DIR" = ${pkgs.cacert}/etc/ssl/certs
+
               . ${profileAgents}
 
               test "$GOPATH" = "$HOME/go"

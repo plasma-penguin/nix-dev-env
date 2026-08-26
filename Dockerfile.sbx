@@ -53,7 +53,8 @@ RUN install -d -m 0755 /etc/nix /etc/profile.d && \
       'extra-trusted-public-keys = niks3.numtide.com-1:DTx8wZduET09hRmMtKdQDxNNthLQETkc/yaX7M4qK0g=' \
       'sandbox = false' \
       > /etc/nix/nix.conf && \
-    install -m 0644 "$NIX_DEV_ENV_PROFILE"/share/tmux/tmux.conf /etc/tmux.conf && \
+    printf '\n' >> /etc/tmux.conf && \
+    cat "$NIX_DEV_ENV_PROFILE"/share/tmux/tmux.conf >> /etc/tmux.conf && \
     for script in "$NIX_DEV_ENV_PROFILE"/share/profile.d/*.sh; do \
       install -m 0644 "$script" "/etc/profile.d/nix-dev-env-$(basename "$script")"; \
     done && \

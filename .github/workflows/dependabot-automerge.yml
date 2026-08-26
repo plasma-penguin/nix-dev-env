@@ -9,7 +9,6 @@ permissions: {}
 
 concurrency:
   group: main-write-and-publish
-  queue: max
 
 jobs:
   merge-github-actions-updates:
