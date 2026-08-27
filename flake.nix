@@ -258,6 +258,11 @@
             command codex --dangerously-bypass-approvals-and-sandbox "$@"
           }
 
+          # OpenCode: auto-approve permissions that are not explicitly denied.
+          opencode() {
+            command opencode --auto "$@"
+          }
+
           # Antigravity (agy): auto-approve tool permissions.
           agy() {
             command agy --dangerously-skip-permissions "$@"
@@ -432,6 +437,7 @@
               command -v agy >/dev/null
               command -v grok >/dev/null
               command -v codex >/dev/null
+              command -v opencode >/dev/null
 
               test -f ${installableEnv}/share/profile.d/00-env.sh
               test -f ${installableEnv}/share/profile.d/10-completion.sh
@@ -477,10 +483,12 @@
               type grok | grep -q function
               type agent | grep -q function
               type codex | grep -q function
+              type opencode | grep -q function
               type agy | grep -q function
               type claude | grep -q function
               grok --version >/dev/null
               codex --help >/dev/null
+              opencode --help >/dev/null
               agy --help >/dev/null
               claude --help >/dev/null
 
