@@ -3,9 +3,9 @@ ARG SBX_TEMPLATE_VARIANT=codex-docker
 # Pin the multi-architecture indexes so each source revision resolves to the
 # same upstream template on AMD64 and ARM64. The weekly update workflow keeps
 # these digests current.
-FROM docker/sandbox-templates:codex-docker@sha256:8dab63bd802d33e0ccf518e5afd0445c480f22b7fc63e7fbcd403ef2ea10908c AS codex-docker
-FROM docker/sandbox-templates:shell-docker@sha256:d86a6cdc105a1b299667a20c40bcf8d0584e56f21d44490a0737bb1baeb44299 AS shell-docker
-FROM docker/sandbox-templates:opencode-docker@sha256:aa55956da26087d7070630fcb0a423583e6591b465f3d757559533503b3906e2 AS opencode-docker
+FROM docker/sandbox-templates:codex-docker@sha256:8b4cd0a46c8b600bc6b6a64af23c03d4c2807fbfc61f47568092a93fb9dc88b0 AS codex-docker
+FROM docker/sandbox-templates:shell-docker@sha256:5fc81bc7a127e59d81b244a06831ae3212a0310b2e5a0349c54e29249e45e919 AS shell-docker
+FROM docker/sandbox-templates:opencode-docker@sha256:d23d51e1eaa7c23db723b3cd547fc998829b5c147579c512c7222efd30761fdd AS opencode-docker
 
 FROM ${SBX_TEMPLATE_VARIANT} AS sandbox-base
 
