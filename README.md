@@ -233,7 +233,7 @@ The publish jobs require:
 - `DOCKERHUB_TOKEN`
 - optional `DOCKERHUB_REPO`
 
-If `DOCKERHUB_REPO` is unset, the workflows publish to `${DOCKERHUB_USERNAME}/nix-dev-env`. The CI workflows configure the public `https://cache.numtide.com` binary cache directly in their Nix settings.
+If `DOCKERHUB_REPO` is unset, the workflows publish to `${DOCKERHUB_USERNAME}/nix-dev-env`. The CI workflows configure the public `https://cache.numtide.com` binary cache directly in their Nix settings. Linux and macOS verification jobs also restore repository-scoped Nix store caches; pull requests have restore-only access, while successful trusted `main` and weekly update runs refresh the architecture-specific caches.
 
 ## VS Code
 
