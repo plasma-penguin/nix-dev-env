@@ -138,6 +138,7 @@
           grok
           opencode
           hermes-agent
+          hermes-desktop
         ];
 
         # ---------------- Linux-only Packages ----------------
@@ -438,6 +439,8 @@
               command -v grok >/dev/null
               command -v codex >/dev/null
               command -v opencode >/dev/null
+              command -v hermes >/dev/null
+              command -v hermes-desktop >/dev/null
 
               test -f ${installableEnv}/share/profile.d/00-env.sh
               test -f ${installableEnv}/share/profile.d/10-completion.sh
@@ -445,6 +448,9 @@
               test -f ${installableEnv}/share/profile.d/30-agents.sh
               test -f ${installableEnv}/share/skel/.bashrc
               test -f ${installableEnv}/share/tmux/tmux.conf
+              ${lib.optionalString isLinux ''
+                test -f ${installableEnv}/share/applications/hermes-desktop.desktop
+              ''}
 
               export HOME="$TMPDIR/home"
               export TMUX_TMPDIR="$TMPDIR/tmux"
@@ -487,6 +493,7 @@
               type agy | grep -q function
               type claude | grep -q function
               grok --version >/dev/null
+              hermes --version >/dev/null
               codex --help >/dev/null
               opencode --help >/dev/null
               agy --help >/dev/null
