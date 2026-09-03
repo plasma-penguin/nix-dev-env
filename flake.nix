@@ -142,10 +142,11 @@
         ];
 
         hermesAgentPackagesForSystem = hermes-agent.packages.${system} or { };
-        hasHermesAgent = hermesAgentPackagesForSystem ? messaging && hermesAgentPackagesForSystem ? desktop;
+        hasHermesAgent = hermesAgentPackagesForSystem ? default && hermesAgentPackagesForSystem ? desktop;
         hermesAgentPackages = lib.optionals hasHermesAgent [
-          # Nous Research recommends this smaller variant for messaging platforms.
-          hermesAgentPackagesForSystem.messaging
+          # The desktop package uses the full default agent internally. Add that
+          # same package explicitly so its CLI commands are also available.
+          hermesAgentPackagesForSystem.default
           hermesAgentPackagesForSystem.desktop
         ];
 
