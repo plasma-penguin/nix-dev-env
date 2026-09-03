@@ -6,6 +6,7 @@
     flake-utils.url = "github:numtide/flake-utils";
     treefmt-nix.url = "github:numtide/treefmt-nix";
     llm-agents.url = "github:numtide/llm-agents.nix";
+    hermes-agent.url = "github:NousResearch/hermes-agent";
   };
 
   outputs =
@@ -15,6 +16,7 @@
       flake-utils,
       treefmt-nix,
       llm-agents,
+      hermes-agent,
     }:
     flake-utils.lib.eachDefaultSystem (
       system:
@@ -137,7 +139,14 @@
           codex
           grok
           opencode
-          hermes-agent
+        ];
+
+        hermesAgentPackagesForSystem = hermes-agent.packages.${system} or { };
+        hasHermesAgent = hermesAgentPackagesForSystem ? messaging && hermesAgentPackagesForSystem ? desktop;
+        hermesAgentPackages = lib.optionals hasHermesAgent [
+          # Nous Research recommends this smaller variant for messaging platforms.
+          hermesAgentPackagesForSystem.messaging
+          hermesAgentPackagesForSystem.desktop
         ];
 
         # ---------------- Linux-only Packages ----------------
@@ -160,7 +169,8 @@
         ];
 
         # ---------------- All Packages ----------------
-        allPackages = commonPackages ++ llmAgentPackages ++ lib.optionals isLinux linuxPackages;
+        allPackages =
+          commonPackages ++ llmAgentPackages ++ hermesAgentPackages ++ lib.optionals isLinux linuxPackages;
 
         # ---- Shell snippets for /etc/profile.d ----
         profileEnv = pkgs.writeText "00-env.sh" ''
@@ -438,6 +448,13 @@
               command -v grok >/dev/null
               command -v codex >/dev/null
               command -v opencode >/dev/null
+              ${lib.optionalString hasHermesAgent ''
+                command -v hermes >/dev/null
+                command -v hermes-agent >/dev/null
+                command -v hermes-acp >/dev/null
+                command -v hermes-desktop >/dev/null
+                test -f ${installableEnv}/share/applications/hermes.desktop
+              ''}
 
               test -f ${installableEnv}/share/profile.d/00-env.sh
               test -f ${installableEnv}/share/profile.d/10-completion.sh
