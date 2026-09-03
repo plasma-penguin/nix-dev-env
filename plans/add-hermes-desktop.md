@@ -48,19 +48,24 @@ Do **not**:
 - Vendor a local `package.nix`
 - Export a new named flake output (`packages.hermes-desktop`) — `hermes-agent` is not exported that way
 - Add a `profileAgents` wrapper — `hermes-agent` has none; desktop is not a CLI approval-bypass tool
+- Add `type hermes` / `type hermes-desktop` function assertions — those checks are only for the `profileAgents` wrappers
 - Add `/Applications` to `pathsToLink` — the Darwin `/bin` wrapper already points at the real store path
 - Touch `flake.lock` unless evaluation proves the pin is missing the attribute (it is not)
 - Document the package in `README.md` — individual LLM tools are not listed there
+- Expand the CI workflow `command -v git && …` smoke lines — `packageSmokeCheck` is the coverage
 
 ### Implementation steps (one PR)
 
-1. Add `hermes-desktop` to `llmAgentPackages` in `flake.nix`.
-2. In `packageSmokeCheck`:
-   - `command -v hermes`
-   - `command -v hermes-desktop`
-   - `hermes --version` (CLI; safe in the sandbox)
-   - Do **not** run `hermes-desktop --help` / launch Electron in the Nix check. That needs a display and is not how this check treats GUI apps.
-   - On Linux only, `test -f ${installableEnv}/share/applications/hermes-desktop.desktop` (`pathsToLink` already includes `/share`).
+1. Add `hermes-desktop` to `llmAgentPackages` in `flake.nix`, immediately after `hermes-agent`.
+2. In `packageSmokeCheck`, only these insertions:
+   - Next to the other `command -v` LLM checks:
+     - `command -v hermes >/dev/null`
+     - `command -v hermes-desktop >/dev/null`
+   - Next to the other `test -f ${installableEnv}/share/…` checks, Linux only via `lib.optionalString isLinux`:
+     - `test -f ${installableEnv}/share/applications/hermes-desktop.desktop`
+   - Next to `grok --version` / `claude --help`, after `. ${profileAgents}`:
+     - `hermes --version >/dev/null`
+   - Do **not** run `hermes-desktop --help` or launch Electron in the Nix check. That needs a display and is not how this check treats GUI apps.
 3. `nix fmt` if the formatter rewrites anything.
 4. Verify as below. Commit implementation on this same branch.
 
