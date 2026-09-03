@@ -137,7 +137,6 @@
           codex
           grok
           opencode
-          hermes-agent
         ];
 
         # ---------------- Linux-only Packages ----------------
