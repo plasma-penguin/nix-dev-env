@@ -87,7 +87,7 @@ jobs:
 
       - name: Upload scratch image artifact
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'plasma-penguin/nix-dev-env' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: scratch-image-${{ matrix.arch }}
           path: scratch-image-${{ matrix.arch }}.tar
@@ -113,7 +113,7 @@ jobs:
 
       - name: Upload Ubuntu image artifact
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'plasma-penguin/nix-dev-env' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ubuntu-image-${{ matrix.arch }}
           path: ubuntu-image-${{ matrix.arch }}.tar
@@ -229,7 +229,7 @@ jobs:
 
       - name: Upload SBX image artifacts
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'plasma-penguin/nix-dev-env' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sbx-images-${{ matrix.arch }}
           path: sbx-*-image-${{ matrix.arch }}.tar
@@ -295,7 +295,7 @@ jobs:
 
     steps:
       - name: Download scratch image artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: scratch-image-${{ matrix.arch }}
           path: /tmp/scratch-image
@@ -394,7 +394,7 @@ jobs:
 
     steps:
       - name: Download Ubuntu image artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ubuntu-image-${{ matrix.arch }}
           path: /tmp/ubuntu-image
@@ -493,7 +493,7 @@ jobs:
 
     steps:
       - name: Download SBX image artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: sbx-images-${{ matrix.arch }}
           path: /tmp/sbx-images
